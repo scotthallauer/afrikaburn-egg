@@ -15,8 +15,10 @@ void loop() {
 
   if (sensorState == HIGH && ledBrightness < 255) {
     analogWrite(ledPin, ledBrightness++);
+    Serial.println("Fading In (" + String(ledBrightness) + "/255)");
   } else if (sensorState == LOW && ledBrightness > 0) {
     analogWrite(ledPin, ledBrightness--);
+    Serial.println("Fading Out (" + String(ledBrightness) + "/255)");
   }
 
   delay(10); 
