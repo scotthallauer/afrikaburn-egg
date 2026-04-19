@@ -36,20 +36,16 @@ void setup() {
 }
 
 void loop() {
-  int distance = getObjectDistance();
-
   int beatProgress = getBeatProgress();
+  
   if (beatProgress >= 100) {
     startBeat();
-    heartRate = calculateHeartRate(distance);
   }
 
   int opacity = getCurrentOpacity(beatProgress);
   updateLight(opacity);
 
-  Serial.print("Distance: "); Serial.print(distance);
-  Serial.print(" cm | BPM: "); Serial.print(heartRate);
-  Serial.print(" | Opacity: "); Serial.print(opacity);
+  Serial.println("Distance: " + String(distance) + " cm | BPM: " + String(heartRate) + " | Opacity: " + String(opacity));
 }
 
 // Returns the detected distance in cm
@@ -72,6 +68,8 @@ int calculateHeartRate(int distance) {
 
 void startBeat() {
   beatStartTime = millis();
+  int distance = getObjectDistance();
+  heartRate = calculateHeartRate(distance);
 }
 
 int getBeatProgress() {
