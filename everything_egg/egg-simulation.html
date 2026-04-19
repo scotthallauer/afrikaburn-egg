@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Egg Lighting Simulation</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #111; color: #eee; font-family: system-ui, sans-serif; display: flex; height: 100vh; overflow: hidden; }
+#canvas-wrap { flex: 1; position: relative; }
+canvas { width: 100%; height: 100%; display: block; }
+#panel { width: 280px; padding: 16px; background: #1a1a1a; overflow-y: auto; border-left: 1px solid #333; font-size: 13px; }
+#panel h2 { font-size: 14px; margin: 12px 0 6px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; }
+#panel h2:first-child { margin-top: 0; }
+#panel label { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
+#panel select, #panel input[type=range] { width: 140px; }
+#panel .val { width: 30px; text-align: right; font-size: 11px; color: #888; }
+.btn { background: #333; border: 1px solid #555; color: #eee; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; margin: 4px 4px 4px 0; }
+.btn:hover { background: #444; }
+.btn.active { background: #558; border-color: #88a; }
+#status { position: absolute; top: 10px; left: 10px; font-size: 12px; color: #888; pointer-events: none; }
+#instructions { position: absolute; bottom: 10px; left: 10px; font-size: 11px; color: #666; pointer-events: none; }
+#debugPanel { position: absolute; bottom: 10px; right: 290px; width: 340px; max-height: 200px; background: rgba(0,0,0,0.85); border: 1px solid #444; border-radius: 4px; font-family: monospace; font-size: 11px; color: #0f0; overflow-y: auto; padding: 6px; display: none; }
+#debugPanel.visible { display: block; }
+</style>
+</head>
+<body>
+<div id="canvas-wrap">
+  <canvas id="c"></canvas>
+  <div id="status"></div>
+  <div id="instructions">Click to place/remove people · Drag to move · Simulation runs automatically when no manual people placed</div>
+  <div id="debugPanel"></div>
+</div>
+<div id="panel">
+  <h2>Mode</h2>
+  <label>Operating: <select id="modeSelect">
+    <option value="auto">Auto</option>
+    <option value="0">Heartbeat</option>
+    <option value="1">Breathing</option>
+    <option value="2">Startle</option>
+    <option value="3">Excitement</option>
+    <option value="4">Peek-a-boo</option>
+    <option value="5">Swarm</option>
+    <option value="6">Tidal</option>
+    <option value="7">Glow Drift</option>
+    <option value="8">Deep Pulse</option>
+    <option value="9">Awakening</option>
+    <option value="10">Supernova</option>
+    <option value="11">Eclipse</option>
+    <option value="12">Shy</option>
+    <option value="13">Ember</option>
+  </select></label>
+
+  <h2>Simulation</h2>
+  <label>Auto people: <input type="checkbox" id="autoPeople" checked></label>
+  <label>Max auto people: <input type="range" id="maxPeople" min="0" max="6" value="4"><span class="val" id="maxPeopleVal">4</span></label>
+  <label>Speed: <input type="range" id="simSpeed" min="1" max="10" value="5"><span class="val" id="simSpeedVal">5</span></label>
+
+  <h2>Egg</h2>
+  <label>Glow radius: <input type="range" id="glowRadius" min="50" max="300" value="150"><span class="val" id="glowRadiusVal">150</span></label>
+  <label>Glow color: <input type="color" id="glowColor" value="#ffaa33"></label>
+
+  <h2>Sensors</h2>
+  <label>Range (px): <input type="range" id="sensorRange" min="100" max="400" value="250"><span class="val" id="sensorRangeVal">250</span></label>
+  <label>Show cones: <input type="checkbox" id="showCones" checked></label>
+  <label>Sensor 1: <input type="checkbox" id="sensor1En" checked></label>
+  <label>Sensor 2: <input type="checkbox" id="sensor2En" checked></label>
+  <label>Sensor 3: <input type="checkbox" id="sensor3En" checked></label>
+
+  <h2>People</h2>
+  <button class="btn" id="clearPeople">Clear All</button>
+  <button class="btn" id="addRandom">Add Random</button>
+
+  <h2>Auto Mode Behaviours</h2>
+  <div id="autoModeChecks" style="font-size:11px; line-height:2;"></div>
+
+  <h2>State</h2>
+  <label>Debug log: <input type="checkbox" id="debugToggle"></label>
+  <div id="stateInfo" style="font-size:11px; color:#888; line-height:1.6;"></div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// Config refs
+const modeSelect = document.getElementById('modeSelect');
+const autoPeopleCheck = document.getElementById('autoPeople');
+const maxPeopleSlider = document.getElementById('maxPeople');
+const simSpeedSlider = document.getElementById('simSpeed');
+const glowRadiusSlider = document.getElementById('glowRadius');
+const glowColorInput = document.getElementById('glowColor');
+const sensorRangeSlider = document.getElementById('sensorRange');
+const showConesCheck = document.getElementById('showCones');
+const stateInfo = document.getElementById('stateInfo');
+const statusEl = document.getElementById('status');
+
+// Behaviour names
+const BEHAVIOUR_NAMES = ['Heartbeat','Breathing','Startle','Excitement','Peek-a-boo','Swarm','Tidal','Glow Drift','Deep Pulse','Awakening','Supernova','Eclipse','Shy','Ember'];
+
+// State
+let W, H, cx, cy;
+let people = []; // {x, y, vx, vy, auto}
+let manualPeople = [];
+let dragging = null;
+let modeStartTime = performance.now();
+let targetModeStartTime = performance.now();
+let glowDriftCurrent = 20, glowDriftTarget = 20, glowDriftNextChange = 0;
+let emberCurrent = 15, emberDriftTarget = 15, emberNextDrift = 0;
+let startleTriggered = false, startleTime = 0;
+let heartbeatPhase = 0, lastHeartbeatTime = 0;
+let excitementPhase = 0, lastExcitementTime = 0;
+let currentBehaviour = 6; // Tidal
+let targetBehaviour = 6;
+let crossfadeProgress = 100;
+let crossfadeStart = 0;
+let currentOpacity = 0;
+const CROSSFADE_MS = 800;
+const AUTO_SWITCH_COOLDOWN = 8000;
+let lastSwitchTime = 0;
+let autoModeEnabled = new Array(14).fill(true);
+let wasIdle = true;
+const MAX_DWELL_MS = 180000;
+
+// Sensor directions (120° apart)
+const sensorAngles = [0, 2*Math.PI/3, 4*Math.PI/3];
+
+function resize() {
+  const wrap = document.getElementById('canvas-wrap');
+  W = canvas.width = wrap.clientWidth;
+  H = canvas.height = wrap.clientHeight;
+  cx = W / 2;
+  cy = H / 2;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// Slider value displays
+['maxPeople','simSpeed','glowRadius','sensorRange'].forEach(id => {
+  const el = document.getElementById(id);
+  const val = document.getElementById(id+'Val');
+  el.addEventListener('input', () => val.textContent = el.value);
+});
+
+// People interaction
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  // Check if clicking on existing manual person
+  for (let i = manualPeople.length - 1; i >= 0; i--) {
+    const p = manualPeople[i];
+    if (Math.hypot(p.x - mx, p.y - my) < 15) {
+      if (e.button === 2 || e.shiftKey) {
+        manualPeople.splice(i, 1);
+        return;
+      }
+      dragging = p;
+      return;
+    }
+  }
+  // Place new person
+  manualPeople.push({x: mx, y: my});
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const rect = canvas.getBoundingClientRect();
+  dragging.x = e.clientX - rect.left;
+  dragging.y = e.clientY - rect.top;
+});
+
+canvas.addEventListener('mouseup', () => { dragging = null; });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+document.getElementById('clearPeople').addEventListener('click', () => { manualPeople = []; });
+document.getElementById('addRandom').addEventListener('click', () => {
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 80 + Math.random() * 200;
+  manualPeople.push({x: cx + Math.cos(angle)*dist, y: cy + Math.sin(angle)*dist});
+});
+
+// Auto people simulation
+let autoPeopleList = [];
+let autoTimer = 0;
+
+function updateAutoPeople(dt) {
+  if (!autoPeopleCheck.checked) { autoPeopleList = []; return; }
+  if (manualPeople.length > 0) { autoPeopleList = []; return; }
+
+  const maxP = parseInt(maxPeopleSlider.value);
+  const speed = parseInt(simSpeedSlider.value);
+
+  autoTimer += dt * speed * 0.001;
+
+  // Randomly add/remove
+  if (autoTimer > 2 + Math.random() * 3) {
+    autoTimer = 0;
+    if (autoPeopleList.length < maxP && Math.random() > 0.3) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 250 + Math.random() * 100;
+      autoPeopleList.push({
+        x: cx + Math.cos(angle)*dist, y: cy + Math.sin(angle)*dist,
+        tx: cx + Math.cos(angle)*(50+Math.random()*150), ty: cy + Math.sin(angle)*(50+Math.random()*150),
+        speed: 0.3 + Math.random() * 0.7
+      });
+    } else if (autoPeopleList.length > 0 && Math.random() > 0.5) {
+      // Send one away
+      const p = autoPeopleList[Math.floor(Math.random()*autoPeopleList.length)];
+      const angle = Math.atan2(p.y - cy, p.x - cx);
+      p.tx = cx + Math.cos(angle)*400;
+      p.ty = cy + Math.sin(angle)*400;
+      p.leaving = true;
+    }
+  }
+
+  // Move auto people toward targets
+  for (let i = autoPeopleList.length - 1; i >= 0; i--) {
+    const p = autoPeopleList[i];
+    const dx = p.tx - p.x, dy = p.ty - p.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 2) {
+      const s = Math.min(p.speed * speed * 0.5, dist);
+      p.x += (dx/dist) * s;
+      p.y += (dy/dist) * s;
+    } else if (!p.leaving) {
+      // Pick new target occasionally
+      if (Math.random() < 0.01 * speed) {
+        const angle = Math.random() * Math.PI * 2;
+        p.tx = cx + Math.cos(angle)*(40+Math.random()*180);
+        p.ty = cy + Math.sin(angle)*(40+Math.random()*180);
+      }
+    } else {
+      autoPeopleList.splice(i, 1);
+    }
+  }
+}
+
+// Sensor computation
+function computeSensors() {
+  const range = parseInt(sensorRangeSlider.value);
+  const allPeople = manualPeople.length > 0 ? manualPeople : autoPeopleList;
+  const sensorEnabled = [
+    document.getElementById('sensor1En').checked,
+    document.getElementById('sensor2En').checked,
+    document.getElementById('sensor3En').checked
+  ];
+
+  let closestDistance = -1;
+  let activeSensorCount = 0;
+  let sensorDistances = [-1, -1, -1];
+
+  for (let s = 0; s < 3; s++) {
+    if (!sensorEnabled[s]) continue;
+    const angle = sensorAngles[s];
+    const coneHalf = Math.PI / 3; // 60° half-angle
+
+    let closest = -1;
+    for (const p of allPeople) {
+      const dx = p.x - cx, dy = p.y - cy;
+      const dist = Math.hypot(dx, dy);
+      if (dist > range) continue;
+
+      const pAngle = Math.atan2(dy, dx);
+      let diff = Math.abs(pAngle - angle);
+      if (diff > Math.PI) diff = 2*Math.PI - diff;
+      if (diff < coneHalf) {
+        if (closest === -1 || dist < closest) closest = dist;
+      }
+    }
+
+    sensorDistances[s] = closest;
+    if (closest > 0) {
+      activeSensorCount++;
+      if (closestDistance === -1 || closest < closestDistance) closestDistance = closest;
+    }
+  }
+
+  return { closestDistance, activeSensorCount, sensorDistances };
+}
+
+// Behaviour engine (mirrors Arduino logic)
+function proximityFactor(closestDistance) {
+  const range = parseInt(sensorRangeSlider.value);
+  if (closestDistance <= 0) return 0;
+  return Math.max(0, Math.min(1, (range - closestDistance) / (range - 30)));
+}
+
+function cycleProgress(cycleDuration) {
+  const elapsed = (performance.now() - modeStartTime) % cycleDuration;
+  return (elapsed / cycleDuration) * 100;
+}
+
+function sinPulse(progress) {
+  return (Math.sin(progress / 100 * Math.PI * 2 - Math.PI/2) + 1) / 2;
+}
+
+function lerp(a, b, t) { return a + (b-a)*t; }
+
+function computeBehaviourOpacity(behaviour, cd, asc) {
+  const prox = proximityFactor(cd);
+  const crowd = asc / 3;
+
+  switch(behaviour) {
+    case 0: { // Heartbeat
+      const cycle = lerp(1200, 500, prox);
+      const now = performance.now();
+      const dt = now - (lastHeartbeatTime || now);
+      lastHeartbeatTime = now;
+      heartbeatPhase = (heartbeatPhase + (dt / cycle) * 100) % 100;
+      const p = heartbeatPhase;
+      let v = 0;
+      if (p < 15) v = sinPulse(p/15*100);
+      else if (p >= 20 && p < 35) v = sinPulse((p-20)/15*100) * 0.6;
+      return (5 + prox*15) + v * (60 + prox*35);
+    }
+    case 1: { // Breathing
+      const cycle = lerp(5000, 3000, prox);
+      const p = cycleProgress(cycle);
+      const low = 5, high = 40 + prox*55;
+      return low + sinPulse(p) * (high - low);
+    }
+    case 2: { // Startle
+      const now = performance.now();
+      if (asc > 0 && !startleTriggered) { startleTriggered = true; startleTime = now; }
+      if (asc === 0) startleTriggered = false;
+      if (startleTriggered && (now - startleTime) < 200) return 40 + ((now - startleTime) / 200) * 40;
+      if (startleTriggered) {
+        const elapsed = now - startleTime - 200;
+        return Math.max(15, 80 - elapsed/40);
+      }
+      return 5;
+    }
+    case 3: { // Excitement
+      const intensity = Math.max(prox, crowd);
+      const cycle = lerp(1200, 400, intensity);
+      const now = performance.now();
+      const dt = now - (lastExcitementTime || now);
+      lastExcitementTime = now;
+      excitementPhase = (excitementPhase + (dt / cycle) * 100) % 100;
+      return Math.min(80, (15+intensity*25) + sinPulse(excitementPhase)*(25+intensity*25));
+    }
+    case 4: { // Peek-a-boo
+      if (prox < 0.1) return 3 + sinPulse(cycleProgress(4000))*5;
+      const cycle = lerp(2000, 600, prox);
+      return 20 + sinPulse(cycleProgress(cycle))*(50+prox*30);
+    }
+    case 5: { // Swarm
+      const cycle = lerp(2000, 600, crowd);
+      const v = sinPulse(cycleProgress(cycle));
+      const v2 = sinPulse(cycleProgress(Math.max(cycle*2/3, 400))) * 0.25;
+      return Math.min(75, (10+crowd*20) + (v+v2)*(20+crowd*20));
+    }
+    case 6: { // Tidal
+      return 8 + sinPulse(cycleProgress(10000))*35;
+    }
+    case 7: { // Glow Drift
+      const now = performance.now();
+      if (now > glowDriftNextChange) {
+        glowDriftTarget = 8 + Math.random()*27;
+        glowDriftNextChange = now + 2000 + Math.random()*3000;
+      }
+      glowDriftCurrent += (glowDriftTarget - glowDriftCurrent) * 0.01;
+      return Math.max(5, Math.min(40, glowDriftCurrent));
+    }
+    case 8: { // Deep Pulse
+      return 4 + sinPulse(cycleProgress(18000))*18;
+    }
+    case 9: { // Awakening
+      if (prox < 0.05) return 2;
+      let target = 10 + prox*85;
+      if (prox > 0.5) target += sinPulse(cycleProgress(3000))*10;
+      return Math.min(100, target);
+    }
+    case 10: { // Supernova
+      const intensity = prox*0.4 + crowd*0.6;
+      if (intensity > 0.8) return 75 + sinPulse(cycleProgress(2000))*10;
+      return (10+intensity*55) + sinPulse(cycleProgress(3000))*(8+intensity*12);
+    }
+    case 11: { // Eclipse
+      const presence = Math.max(prox, crowd);
+      return Math.max(5, Math.min(95, (85 - presence*75) + sinPulse(cycleProgress(6000))*8));
+    }
+    case 12: { // Shy
+      if (prox > 0.1) return Math.max(3, Math.min(55, (50-prox*45) + sinPulse(cycleProgress(4000))*5));
+      return 30 + sinPulse(cycleProgress(7000))*50;
+    }
+    case 13: { // Ember
+      const now = performance.now();
+      if (now > emberNextDrift) {
+        emberDriftTarget = 12 + Math.random()*10;
+        emberNextDrift = now + 3000 + Math.random()*4000;
+      }
+      emberCurrent += (emberDriftTarget - emberCurrent) * 0.005;
+      emberCurrent = Math.max(10, Math.min(25, emberCurrent));
+      if (prox > 0.05) {
+        const swell = prox * 25 + sinPulse(cycleProgress(6000)) * prox * 10;
+        return Math.min(55, emberCurrent + swell);
+      }
+      return emberCurrent;
+    }
+  }
+  return 0;
+}
+
+// Auto mode selection
+function selectAutoBehaviour(cd, asc) {
+  let pool;
+  if (asc === 0) {
+    pool = [6, 1, 7, 8, 13]; // Tidal, Breathing, Glow Drift, Deep Pulse, Ember
+  } else if (asc === 1) {
+    pool = [9, 0, 4, 12, 13]; // Awakening, Heartbeat, Peek-a-boo, Shy, Ember
+  } else if (asc === 2) {
+    pool = [3, 12, 0, 9, 13]; // Excitement, Shy, Heartbeat, Awakening, Ember
+  } else {
+    pool = [10, 5, 3, 0, 13]; // Supernova, Swarm, Excitement, Heartbeat, Ember
+  }
+  // Filter to enabled only
+  const enabled = pool.filter(b => autoModeEnabled[b]);
+  if (enabled.length === 0) return pool[0];
+  // Pick randomly, avoiding current if possible
+  const others = enabled.filter(b => b !== currentBehaviour);
+  const choices = others.length > 0 ? others : enabled;
+  return choices[Math.floor(Math.random() * choices.length)];
+}
+
+// Rendering
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return {r,g,b};
+}
+
+function draw(opacity, sensorData) {
+  ctx.clearRect(0, 0, W, H);
+
+  const glowR = parseInt(glowRadiusSlider.value);
+  const range = parseInt(sensorRangeSlider.value);
+  const color = hexToRgb(glowColorInput.value);
+  const alpha = opacity / 100;
+
+  // Draw sensor cones
+  if (showConesCheck.checked) {
+    for (let s = 0; s < 3; s++) {
+      const angle = sensorAngles[s];
+      const coneHalf = Math.PI / 3;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, range, angle - coneHalf, angle + coneHalf);
+      ctx.closePath();
+      ctx.fillStyle = sensorData.sensorDistances[s] > 0 ? 'rgba(100,200,100,0.05)' : 'rgba(100,100,100,0.03)';
+      ctx.fill();
+      ctx.strokeStyle = sensorData.sensorDistances[s] > 0 ? 'rgba(100,200,100,0.3)' : 'rgba(100,100,100,0.15)';
+      ctx.stroke();
+    }
+  }
+
+  // Egg glow
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR * (0.5 + alpha*0.8));
+  grad.addColorStop(0, `rgba(${color.r},${color.g},${color.b},${alpha})`);
+  grad.addColorStop(0.4, `rgba(${color.r},${color.g},${color.b},${alpha*0.6})`);
+  grad.addColorStop(1, `rgba(${color.r},${color.g},${color.b},0)`);
+  ctx.beginPath();
+  ctx.arc(cx, cy, glowR, 0, Math.PI*2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Egg body (ellipse)
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, 28, 35, 0, 0, Math.PI*2);
+  ctx.fillStyle = `rgba(${Math.min(255,color.r+50)},${Math.min(255,color.g+50)},${Math.min(255,color.b+50)},${0.3+alpha*0.7})`;
+  ctx.fill();
+  ctx.strokeStyle = `rgba(255,255,255,${0.2+alpha*0.4})`;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Spiral hint on egg
+  ctx.beginPath();
+  for (let t = 0; t < Math.PI*6; t += 0.1) {
+    const r = 5 + t*4;
+    if (r > 33) break;
+    const x = cx + Math.cos(t)*r*0.8;
+    const y = cy + Math.sin(t)*r;
+    t === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle = `rgba(255,255,255,${0.1+alpha*0.3})`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Draw people
+  const allPeople = manualPeople.length > 0 ? manualPeople : autoPeopleList;
+  for (const p of allPeople) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI*2);
+    ctx.fillStyle = '#4af';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y-3, 4, 0, Math.PI*2);
+    ctx.fillStyle = '#4af';
+    ctx.fill();
+  }
+
+  // Sensor direction indicators
+  for (let s = 0; s < 3; s++) {
+    const angle = sensorAngles[s];
+    const x = cx + Math.cos(angle)*40;
+    const y = cy + Math.sin(angle)*40;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI*2);
+    ctx.fillStyle = sensorData.sensorDistances[s] > 0 ? '#5a5' : '#555';
+    ctx.fill();
+  }
+}
+
+// Main loop
+let lastTime = performance.now();
+
+function frame(now) {
+  const dt = now - lastTime;
+  lastTime = now;
+
+  updateAutoPeople(dt);
+  const sensorData = computeSensors();
+  const { closestDistance: cd, activeSensorCount: asc } = sensorData;
+
+  // Mode selection
+  const mode = modeSelect.value;
+  let desired;
+  if (mode === 'auto') {
+    const isIdle = (asc === 0);
+    const stateTransition = (isIdle !== wasIdle);
+    const dwellExpired = (now - lastSwitchTime) > MAX_DWELL_MS;
+    wasIdle = isIdle;
+
+    if ((stateTransition || dwellExpired) && crossfadeProgress >= 100) {
+      desired = selectAutoBehaviour(cd, asc);
+      lastSwitchTime = now;
+      if (desired !== currentBehaviour) {
+        crossfadeStart = now;
+        crossfadeProgress = 0;
+        targetBehaviour = desired;
+        targetModeStartTime = now;
+        if (desired === 0) { heartbeatPhase = 0; lastHeartbeatTime = now; }
+        if (desired === 3) { excitementPhase = 0; lastExcitementTime = now; }
+      }
+    }
+  } else {
+    desired = parseInt(mode);
+    if (desired !== targetBehaviour && crossfadeProgress >= 100) {
+      crossfadeStart = now;
+      crossfadeProgress = 0;
+      targetBehaviour = desired;
+      targetModeStartTime = now;
+      if (desired === 0) { heartbeatPhase = 0; lastHeartbeatTime = now; }
+      if (desired === 3) { excitementPhase = 0; lastExcitementTime = now; }
+    }
+  }
+
+  // Update crossfade
+  if (crossfadeProgress < 100) {
+    crossfadeProgress = Math.min(100, ((now - crossfadeStart) / CROSSFADE_MS) * 100);
+  }
+
+  // Compute output
+  const savedModeStartTime = modeStartTime;
+  modeStartTime = targetModeStartTime;
+  const targetOpacity = computeBehaviourOpacity(targetBehaviour, cd, asc);
+  modeStartTime = savedModeStartTime;
+
+  let output;
+  if (crossfadeProgress >= 100) {
+    if (currentBehaviour !== targetBehaviour) {
+      modeStartTime = targetModeStartTime;
+      currentBehaviour = targetBehaviour;
+    }
+    output = targetOpacity;
+  } else {
+    const oldOpacity = computeBehaviourOpacity(currentBehaviour, cd, asc);
+    const blend = crossfadeProgress / 100;
+    output = oldOpacity*(1-blend) + targetOpacity*blend;
+  }
+
+  output = Math.max(0, Math.min(100, output));
+  currentOpacity = output;
+
+  draw(output, sensorData);
+  debugLog(now, output, sensorData);
+
+  // Update state info
+  stateInfo.innerHTML = `
+    Behaviour: <b>${BEHAVIOUR_NAMES[currentBehaviour]}</b>${currentBehaviour !== targetBehaviour ? ` → ${BEHAVIOUR_NAMES[targetBehaviour]}` : ''}<br>
+    Opacity: ${output.toFixed(1)}%<br>
+    Closest: ${cd > 0 ? cd.toFixed(0)+'px' : 'none'}<br>
+    Active sensors: ${asc}/3<br>
+    People: ${(manualPeople.length > 0 ? manualPeople : autoPeopleList).length}
+  `;
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+
+// Generate auto-mode checkboxes
+const checksDiv = document.getElementById('autoModeChecks');
+BEHAVIOUR_NAMES.forEach((name, i) => {
+  const lbl = document.createElement('label');
+  lbl.style.display = 'flex';
+  lbl.style.justifyContent = 'space-between';
+  lbl.style.alignItems = 'center';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = true;
+  cb.addEventListener('change', () => { autoModeEnabled[i] = cb.checked; });
+  lbl.textContent = name;
+  lbl.appendChild(cb);
+  checksDiv.appendChild(lbl);
+});
+
+// Debug logging
+const debugPanel = document.getElementById('debugPanel');
+const debugToggle = document.getElementById('debugToggle');
+let lastDebugLog = 0;
+const MAX_DEBUG_LINES = 50;
+
+debugToggle.addEventListener('change', () => {
+  debugPanel.classList.toggle('visible', debugToggle.checked);
+});
+
+function debugLog(now, output, sensorData) {
+  if (!debugToggle.checked || now - lastDebugLog < 500) return;
+  lastDebugLog = now;
+  const line = `B:${currentBehaviour} T:${targetBehaviour} O:${output.toFixed(0)} CF:${crossfadeProgress.toFixed(0)} D:${sensorData.closestDistance > 0 ? sensorData.closestDistance.toFixed(0) : '-1'} S:${sensorData.activeSensorCount} [${sensorData.sensorDistances.map(d => d > 0 ? d.toFixed(0) : '-1').join(',')}]`;
+  debugPanel.textContent += line + '\n';
+  // Trim old lines
+  const lines = debugPanel.textContent.split('\n');
+  if (lines.length > MAX_DEBUG_LINES) debugPanel.textContent = lines.slice(-MAX_DEBUG_LINES).join('\n');
+  debugPanel.scrollTop = debugPanel.scrollHeight;
+}
+</script>
+</body>
+</html>
