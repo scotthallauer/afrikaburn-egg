@@ -109,6 +109,7 @@ let emberCurrent = 15, emberDriftTarget = 15, emberNextDrift = 0;
 let startleTriggered = false, startleTime = 0;
 let heartbeatPhase = 0, lastHeartbeatTime = 0;
 let excitementPhase = 0, lastExcitementTime = 0;
+let peekabooPhase = 0, lastPeekabooTime = 0;
 let currentBehaviour = 6; // Tidal
 let targetBehaviour = 6;
 let crossfadeProgress = 100;
@@ -341,9 +342,16 @@ function computeBehaviourOpacity(behaviour, cd, asc) {
       return Math.min(80, (15+intensity*25) + sinPulse(excitementPhase)*(25+intensity*25));
     }
     case 4: { // Peek-a-boo
-      if (prox < 0.1) return 3 + sinPulse(cycleProgress(4000))*5;
+      const now = performance.now();
+      const dt = now - lastPeekabooTime;
+      lastPeekabooTime = now;
+      if (prox < 0.1) {
+        peekabooPhase = (peekabooPhase + dt / 4000 * 100) % 100;
+        return 3 + sinPulse(peekabooPhase)*5;
+      }
       const cycle = lerp(2000, 600, prox);
-      return 20 + sinPulse(cycleProgress(cycle))*(50+prox*30);
+      peekabooPhase = (peekabooPhase + dt / cycle * 100) % 100;
+      return 20 + sinPulse(peekabooPhase)*(50+prox*30);
     }
     case 5: { // Swarm
       const cycle = lerp(2000, 600, crowd);

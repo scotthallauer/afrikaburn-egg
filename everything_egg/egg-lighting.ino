@@ -111,6 +111,8 @@ unsigned long lastExcitementTime = 0;
 float excitementPhase = 0;
 bool startleTriggered = false;
 unsigned long startleTime = 0;
+unsigned long lastPeekabooTime = 0;
+float peekabooPhase = 0;
 float glowDriftTarget = 20;
 float glowDriftCurrent = 20;
 unsigned long glowDriftNextChange = 0;
@@ -291,16 +293,22 @@ float behaviourExcitement() {
 // Peek-a-boo: dims to near-dark, pulses brightly when someone close
 float behaviourPeekaboo() {
   float prox = proximityFactor();
+  unsigned long now = millis();
+  unsigned long dt = now - lastPeekabooTime;
+  lastPeekabooTime = now;
 
   if (prox < 0.1) {
     // Dim idle state with subtle movement
-    int p = cycleProgress(4000);
-    return 3 + sinPulse(p) * 5;
+    peekabooPhase += (dt / 4000.0) * 100.0;
+    if (peekabooPhase >= 100) peekabooPhase -= 100;
+    return 3 + sinPulse((int)peekabooPhase) * 5;
   }
 
   // "Noticed you" — bright pulse
   unsigned long cycle = map((int)(prox * 100), 10, 100, 2000, 600);
-  int p = cycleProgress(cycle);
+  peekabooPhase += (dt / (float)cycle) * 100.0;
+  if (peekabooPhase >= 100) peekabooPhase -= 100;
+  int p = (int)peekabooPhase;
   return 20 + sinPulse(p) * (50 + prox * 30);
 }
 
